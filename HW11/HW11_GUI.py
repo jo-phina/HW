@@ -1,13 +1,18 @@
 import sys
+import numpy as np
+import tensorflow.lite as tflite
 
 from PyQt5.QtWidgets import (QApplication, QPushButton, QWidget,QMainWindow,
-                             QFileDialog, QGridLayout, QLabel, QVBoxLayout, QHBoxLayout, QMessageBox, QComboBox)
-from PyQt5.QtGui import QPixmap
+                             QFileDialog, QLabel, QVBoxLayout)
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
 
-import pyqtgraph as pg
-import json
-import imageio.v2 as io
+import cv2
+
+
+# Load class names for Fashion MNIST
+class_names = ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+    "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"]
 
 class MyApp(QMainWindow):
     def __init__(self):
@@ -16,7 +21,7 @@ class MyApp(QMainWindow):
         # Run function to set defaults
         # self.set_defaults()
 
-        self.setWindowTitle("Image Classifier")
+        self.setWindowTitle("Clothes Image Classifier")
         self.setGeometry(100, 100, 600, 400)
 
         # create central widget
@@ -26,30 +31,46 @@ class MyApp(QMainWindow):
         c_widget.setLayout(self.mainLayout)
 
         # Image display label
-        self.image_label = QLabel("Drag an image here", self)
+        self.image_label = QLabel("Drag an image here or click to select", self)
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setStyleSheet("border: 2px dashed #aaa;")
         self.image_label.setFixedSize(400, 300)
-        
+        self.image_label.mousePressEvent = self.open_file_dialog
+
         self.mainLayout.addWidget(self.image_label)
+
+
 
         # Classification result label
         self.result_label = QLabel("Classification result: ", self)
         self.result_label.setAlignment(Qt.AlignCenter)
         self.mainLayout.addWidget(self.result_label)
         
-        # Buttons
+        # BUTTONS
+
+        # Classify-Button
         self.classify_button = QPushButton("Classify", self)
         self.classify_button.clicked.connect(self.classify_image)
         self.mainLayout.addWidget(self.classify_button)
         
+        # Clear Image-Button
         self.clear_button = QPushButton("Clear Image", self)
         self.clear_button.clicked.connect(self.clear_image)
         self.mainLayout.addWidget(self.clear_button)
 
+
+        #DRAG-AND-DROP
         # Enable drag-and-drop functionality
         self.setAcceptDrops(True)
         self.file_path = None
+        self.image_loaded = False
+
+        # LOAD TFLITE
+        # Load TensorFlow Lite model
+        self.interpreter = tflite.Interpreter(model_path="./HW/HW11/fashion_mnist.tflite")
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
 
 
     def dragEnterEvent(self, event):
@@ -57,23 +78,50 @@ class MyApp(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            self.display_image(file_path)
-    
+        if not self.image_loaded:
+            urls = event.mimeData().urls()
+            if urls:
+                self.file_path = urls[0].toLocalFile()
+                self.display_image(self.file_path)
+
+    def open_file_dialog(self, event):
+        if not self.image_loaded:
+            file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg)")
+            if file_path:
+                self.file_path = file_path
+                self.display_image(self.file_path)
+
     def display_image(self, file_path):
         pixmap = QPixmap(file_path)
         if not pixmap.isNull():
             self.image_label.setPixmap(pixmap.scaled(400, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-
+            self.image_loaded = True
         else:
             self.image_label.setText("Failed to load image")
 
+    def preprocess_image(self, file_path):
+        img = cv2.imread(file_path, cv2.IMREAD_GRAYSCALE)
+        # Ensure aspect ratio is maintained while resizing
+        img = cv2.resize(img, (28, 28))
+            # Normalize pixel values
+        img = img.astype(np.float32) / 255.0  
+        # Ensure correct shape
+        expected_shape = self.input_details[0]['shape']  # Get expected model input shape
+        img = img.reshape(expected_shape)  # Reshape dynamically
+        return img
+
+
     def classify_image(self):
         if self.file_path:
-            # Placeholder for actual classification logic
-            self.result_label.setText(f"Classification result: Processing {self.file_path}")
+            img = self.preprocess_image(self.file_path)
+
+            # Run inference
+            self.interpreter.set_tensor(self.input_details[0]['index'], img)
+            self.interpreter.invoke()
+            output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
+            predicted_label = np.argmax(output_data)
+
+            self.result_label.setText(f"Classification result: {class_names[predicted_label]}")
         else:
             self.result_label.setText("No image loaded")
     
@@ -82,6 +130,7 @@ class MyApp(QMainWindow):
         self.image_label.setPixmap(QPixmap())
         self.result_label.setText("Classification result: ")
         self.file_path = None
+        self.image_loaded = False
 
 
 
